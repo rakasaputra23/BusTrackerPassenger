@@ -11,7 +11,8 @@ data class Bus(
     val driver: String?          = null,
     val status: String?          = null,
     val kondisi: String?         = null,
-    val kondisiUpdate: String?   = null,
+    // FIX Bug #1: kondisiUpdate di database adalah Long (timestamp), bukan String
+    val kondisiUpdate: Long?     = null,
     val totalDistance: Double?   = null,
     val location: BusLocation?   = null,
     val track: List<TrackPoint>  = emptyList(),
@@ -42,8 +43,10 @@ data class Bus(
 
     // ─── Inner: Track Point ────────────────────────────────────────────────────
     data class TrackPoint(
-        val lat: Double = 0.0,
-        val lng: Double = 0.0,
+        val lat: Double       = 0.0,
+        val lng: Double       = 0.0,
+        // FIX Bug #3: tambahkan field timestamp agar tidak terbuang
+        val timestamp: Long?  = null,
     )
 
     // ─── Inner: ETA ───────────────────────────────────────────────────────────

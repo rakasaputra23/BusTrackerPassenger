@@ -23,6 +23,8 @@ import com.google.android.gms.maps.model.*
 import com.google.maps.android.PolyUtil
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.MyLocation
 
 /**
  * MapScreen — layar utama aplikasi Bus Tracker Passenger.
@@ -220,6 +222,54 @@ fun MapScreen(viewModel: BusViewModel = viewModel()) {
                 .padding(start = 16.dp, bottom = 20.dp)
                 .navigationBarsPadding(),
         )
+
+        // ── Tombol My Location (kanan bawah) ───────────────────────────────────
+        FloatingActionButton(
+            onClick = {
+                if (locationPermission.status.isGranted) {
+                    uiState.userLocation?.let { userLoc ->
+                        scope.launch {
+                            cameraPositionState.animate(
+                                update     = CameraUpdateFactory.newLatLngZoom(userLoc, 16f),
+                                durationMs = 700,
+                            )
+                        }
+                    } ?: run {
+                        // Fallback: ambil ulang last location kalau state belum terisi
+                        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+                        try {
+                            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                                loc?.let {
+                                    val latLng = LatLng(it.latitude, it.longitude)
+                                    viewModel.updateUserLocation(latLng)
+                                    scope.launch {
+                                        cameraPositionState.animate(
+                                            update     = CameraUpdateFactory.newLatLngZoom(latLng, 16f),
+                                            durationMs = 700,
+                                        )
+                                    }
+                                }
+                            }
+                        } catch (_: SecurityException) { /* belum granted */ }
+                    }
+                } else {
+                    locationPermission.launchPermissionRequest()
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 20.dp)
+                .navigationBarsPadding(),
+            containerColor = White,
+            contentColor   = Blue600,
+            shape          = androidx.compose.foundation.shape.CircleShape,
+            elevation      = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp),
+        ) {
+            Icon(
+                imageVector        = Icons.Rounded.MyLocation,
+                contentDescription = "Ke lokasi saya",
+            )
+        }
 
         // ── Loading spinner ─────────────────────────────────────────────────────
         AnimatedVisibility(

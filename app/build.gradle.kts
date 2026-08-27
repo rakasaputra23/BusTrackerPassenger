@@ -68,6 +68,8 @@ android {
 
 dependencies {
 
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.junit.ktx)
     // ── Compose BOM ───────────────────────────────────────────────────────────
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
 
@@ -119,4 +121,5 @@ dependencies {
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(kotlin("test"))
 }

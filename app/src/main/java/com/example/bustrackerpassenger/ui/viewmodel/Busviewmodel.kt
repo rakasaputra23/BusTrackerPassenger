@@ -40,24 +40,29 @@ class BusViewModel : ViewModel() {
 
                 for (busSnapshot in snapshot.children) {
                     try {
-                        val busId            = busSnapshot.key ?: continue
-                        val namaBus          = busSnapshot.child("namaBus").getValue(String::class.java)
-                        val plateNumber      = busSnapshot.child("plateNumber").getValue(String::class.java)
-                        val busClass         = busSnapshot.child("class").getValue(String::class.java)
-                        val route            = busSnapshot.child("route").getValue(String::class.java)
-                        val capacity         = busSnapshot.child("capacity").getValue(Int::class.java) ?: 0
-                        val currentPassengers= busSnapshot.child("currentPassengers").getValue(Int::class.java) ?: 0
-                        val driver           = busSnapshot.child("driver").getValue(String::class.java)
-                        val status           = busSnapshot.child("status").getValue(String::class.java)
-                        val kondisi          = busSnapshot.child("kondisi").getValue(String::class.java)
-                        val kondisiUpdate    = busSnapshot.child("kondisiUpdate").getValue(String::class.java)
-                        val totalDistance    = busSnapshot.child("totalDistance").getValue(Double::class.java)
-                        val encodedRoute     = busSnapshot.child("routePolyline").getValue(String::class.java)
+                        val busId             = busSnapshot.key ?: continue
+                        val namaBus           = busSnapshot.child("namaBus").getValue(String::class.java)
+                        val plateNumber       = busSnapshot.child("plateNumber").getValue(String::class.java)
+                        val busClass          = busSnapshot.child("class").getValue(String::class.java)
+                        val route             = busSnapshot.child("route").getValue(String::class.java)
+                        val capacity          = busSnapshot.child("capacity").getValue(Int::class.java) ?: 0
+                        val currentPassengers = busSnapshot.child("currentPassengers").getValue(Int::class.java) ?: 0
+                        val driver            = busSnapshot.child("driver").getValue(String::class.java)
+                        val status            = busSnapshot.child("status").getValue(String::class.java)
+                        val kondisi           = busSnapshot.child("kondisi").getValue(String::class.java)
+                        val encodedRoute      = busSnapshot.child("routePolyline").getValue(String::class.java)
 
-                        val lat    = busSnapshot.child("location/latitude").getValue(Double::class.java)
-                        val lng    = busSnapshot.child("location/longitude").getValue(Double::class.java)
-                        val speed  = busSnapshot.child("location/speed").getValue(Double::class.java)
-                        val lastUp = busSnapshot.child("location/lastUpdate").getValue(String::class.java)
+                        // FIX Bug #1: kondisiUpdate adalah Long di database, bukan String
+                        val kondisiUpdate = busSnapshot.child("kondisiUpdate").getValue(Long::class.java)
+
+                        val totalDistance = busSnapshot.child("totalDistance").getValue(Double::class.java)
+
+                        val lat   = busSnapshot.child("location/latitude").getValue(Double::class.java)
+                        val lng   = busSnapshot.child("location/longitude").getValue(Double::class.java)
+                        val speed = busSnapshot.child("location/speed").getValue(Double::class.java)
+
+                        // FIX Bug #2: lastUpdate adalah Long di database, bukan String
+                        val lastUp = busSnapshot.child("location/lastUpdate").getValue(Long::class.java)
 
                         if (lat == null || lng == null || lat == 0.0 || lng == 0.0) continue
 
@@ -71,33 +76,35 @@ class BusViewModel : ViewModel() {
                             estimatedArrival  = etaSnap.child("estimatedArrival").getValue(String::class.java),
                         ) else null
 
-                        // Track — unlimited points, sama dengan asli
+                        // FIX Bug #3: track point sekarang juga membaca timestamp
                         val track = busSnapshot.child("track").children.mapNotNull { tp ->
-                            val tLat = tp.child("lat").getValue(Double::class.java)
-                            val tLng = tp.child("lng").getValue(Double::class.java)
-                            if (tLat != null && tLng != null) Bus.TrackPoint(tLat, tLng) else null
+                            val tLat       = tp.child("lat").getValue(Double::class.java)
+                            val tLng       = tp.child("lng").getValue(Double::class.java)
+                            val tTimestamp = tp.child("timestamp").getValue(Long::class.java)
+                            if (tLat != null && tLng != null) Bus.TrackPoint(tLat, tLng, tTimestamp) else null
                         }
 
                         buses += Bus(
-                            busId            = busId,
-                            namaBus          = namaBus,
-                            plateNumber      = plateNumber,
-                            busClass         = busClass,
-                            route            = route,
-                            capacity         = capacity,
-                            currentPassengers= currentPassengers,
-                            driver           = driver,
-                            status           = status,
-                            kondisi          = kondisi,
-                            kondisiUpdate    = kondisiUpdate,
-                            totalDistance    = totalDistance,
-                            location         = location,
-                            track            = track,
-                            encodedRoute     = encodedRoute,
-                            eta              = eta,
+                            busId             = busId,
+                            namaBus           = namaBus,
+                            plateNumber       = plateNumber,
+                            busClass          = busClass,
+                            route             = route,
+                            capacity          = capacity,
+                            currentPassengers = currentPassengers,
+                            driver            = driver,
+                            status            = status,
+                            kondisi           = kondisi,
+                            kondisiUpdate     = kondisiUpdate,
+                            totalDistance     = totalDistance,
+                            location          = location,
+                            track             = track,
+                            encodedRoute      = encodedRoute,
+                            eta               = eta,
                         )
                     } catch (e: Exception) {
-                        // Skip bus dengan data corrupt
+                        // Log error agar lebih mudah di-debug ke depannya
+                        android.util.Log.e("BusViewModel", "Error parsing bus: ${busSnapshot.key}", e)
                     }
                 }
 

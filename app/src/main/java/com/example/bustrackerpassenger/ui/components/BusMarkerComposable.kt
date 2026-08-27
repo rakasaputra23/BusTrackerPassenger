@@ -1,9 +1,12 @@
 package com.example.bustrackerpassenger.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.TwoWayConverter
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DirectionsBus
@@ -11,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -22,13 +24,27 @@ import com.google.maps.android.compose.MarkerComposable
 import com.google.maps.android.compose.rememberMarkerState
 
 /**
- * Wrapper composable yang menaruh [BusMarkerContent] sebagai custom marker
- * di dalam GoogleMap composable.
- *
- * @param bus        Data bus yang akan ditampilkan
- * @param isSelected Apakah marker ini sedang dipilih
- * @param onBusClick Callback saat marker di-tap
+ * Converter agar LatLng bisa dianimasikan oleh Animatable
+ * (lat & lng diperlakukan sebagai 2 nilai float independen).
  */
+private val LatLngToVector: TwoWayConverter<LatLng, AnimationVector2D> = TwoWayConverter(
+    convertToVector = { latLng ->
+        AnimationVector2D(latLng.latitude.toFloat(), latLng.longitude.toFloat())
+    },
+    convertFromVector = { vector ->
+        LatLng(vector.v1.toDouble(), vector.v2.toDouble())
+    }
+)
+
+/**
+ * Durasi animasi perpindahan marker.
+ * Firebase update tiap ~3-5 detik, jadi 2500ms cukup mulus
+ * dan tetap "selesai" sebelum update berikutnya datang.
+ * Kalau update baru datang saat animasi masih jalan,
+ * Animatable akan otomatis re-target dari posisi saat ini (tidak snap).
+ */
+private const val MARKER_ANIMATION_DURATION_MS = 2500
+
 @Composable
 fun BusMarkerItem(
     bus: Bus,
@@ -36,43 +52,48 @@ fun BusMarkerItem(
     onBusClick: () -> Unit,
 ) {
     val location = bus.location ?: return
+    val targetLatLng = LatLng(location.latitude, location.longitude)
 
-    val markerState = rememberMarkerState(
-        position = LatLng(location.latitude, location.longitude)
-    )
+    // Animatable menyimpan posisi "saat ini" yang dianimasikan secara kontinu.
+    val animatedPosition = remember(bus.busId) {
+        Animatable(targetLatLng, LatLngToVector)
+    }
 
-    // Sinkronisasi posisi marker dengan data Firebase realtime
-    LaunchedEffect(location.latitude, location.longitude) {
-        markerState.position = LatLng(location.latitude, location.longitude)
+    val markerState = rememberMarkerState(position = animatedPosition.value)
+
+    // Setiap kali lat/lng baru datang dari Firebase, animasikan dari posisi
+    // SAAT INI (bukan posisi lama yang statis) menuju posisi baru.
+    LaunchedEffect(targetLatLng) {
+        animatedPosition.animateTo(
+            targetValue = targetLatLng,
+            animationSpec = tween(
+                durationMillis = MARKER_ANIMATION_DURATION_MS,
+            )
+        )
+    }
+
+    // Sinkronkan setiap frame animasi ke posisi marker di peta.
+    LaunchedEffect(animatedPosition.value) {
+        markerState.position = animatedPosition.value
     }
 
     MarkerComposable(
-        // keys memicu re-render marker saat data berubah
-        keys     = arrayOf(bus.busId, isSelected, bus.isOnline, bus.occupancyPercent),
-        state    = markerState,
-        onClick  = {
+        keys    = arrayOf(bus.busId, isSelected, bus.isOnline, bus.occupancyPercent),
+        state   = markerState,
+        onClick = {
             onBusClick()
-            true // consume event agar info window default tidak muncul
+            true
         },
     ) {
         BusMarkerContent(bus = bus, isSelected = isSelected)
     }
 }
 
-/**
- * Tampilan visual marker bus — bubble label + triangle pointer.
- *
- * Desain:
- * - Normal   : putih dengan border hijau (online) / abu (offline)
- * - Selected : biru solid (Blue600)
- */
 @Composable
 fun BusMarkerContent(bus: Bus, isSelected: Boolean) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-
-        // ── Bubble ────────────────────────────────────────────────────────────
         Surface(
             shape           = RoundedCornerShape(12.dp),
             color           = if (isSelected) Blue600 else White,
@@ -87,20 +108,14 @@ fun BusMarkerContent(bus: Bus, isSelected: Boolean) {
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                // Status dot
-                Box(
-                    modifier = Modifier
-                        .size(5.dp)
-                        .also {
-                            // Hanya tampilkan dot saat tidak selected
-                            if (isSelected) return@also
+                if (!isSelected) {
+                    Box(modifier = Modifier.size(5.dp)) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            drawCircle(
+                                color  = if (bus.isOnline) Green500 else Slate300,
+                                radius = size.minDimension / 2,
+                            )
                         }
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        drawCircle(
-                            color  = if (bus.isOnline) Green500 else Slate300,
-                            radius = size.minDimension / 2,
-                        )
                     }
                 }
 
@@ -121,7 +136,6 @@ fun BusMarkerContent(bus: Bus, isSelected: Boolean) {
             }
         }
 
-        // ── Triangle pointer ──────────────────────────────────────────────────
         val pointerColor = if (isSelected) Blue600 else White
         Canvas(modifier = Modifier.size(width = 14.dp, height = 7.dp)) {
             drawPath(

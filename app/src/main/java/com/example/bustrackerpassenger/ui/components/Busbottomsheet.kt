@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bustrackerpassenger.models.Bus
 import com.example.bustrackerpassenger.ui.theme.*
-import com.example.bustrackerpassenger.utils.DistanceCalculator
+import com.example.bustrackerpassenger.utils.PassengerETACalculator
 import com.google.android.gms.maps.model.LatLng
 import java.text.SimpleDateFormat
 import java.util.*
@@ -216,18 +217,51 @@ private fun RouteCard(route: String) {
 
 @Composable
 private fun InfoBoxRow(bus: Bus, userLocation: LatLng?) {
-    // Hitung jarak & ETA user
-    val (distanceKm, etaMinutes) = remember(bus, userLocation) {
-        if (userLocation != null && bus.location != null) {
-            val dist = DistanceCalculator.calculateDistance(
-                userLocation.latitude, userLocation.longitude,
-                bus.location.latitude, bus.location.longitude,
-            )
-            val speed = bus.location.speed
-            val eta = if (speed > 5f) ((dist / speed) * 60).toInt()
-            else bus.eta?.remainingTime?.let { it / 60 }
-            dist to eta
-        } else null to null
+    // ✅ FIX: ESTIMASI & JARAK sekarang pakai Google Routes API (PassengerETACalculator),
+    // sama seperti pendekatan ETACalculator di crew app — supaya mengikuti jalur jalan asli
+    // + traffic-aware, bukan garis lurus (Haversine).
+    // Dipanggil async via LaunchedEffect dengan throttling (ETA_THROTTLE_MS) supaya tidak
+    // spam request tiap kali lokasi bus update dari Firebase.
+
+    var distanceKm by remember { mutableStateOf<Double?>(null) }
+    var etaMinutes by remember { mutableStateOf<Int?>(null) }
+    var lastCalculatedAt by remember { mutableStateOf(0L) }
+
+    val busLat = bus.location?.latitude
+    val busLng = bus.location?.longitude
+
+    LaunchedEffect(userLocation, busLat, busLng) {
+        if (userLocation == null || busLat == null || busLng == null) {
+            distanceKm = null
+            etaMinutes = null
+            return@LaunchedEffect
+        }
+
+        val now = System.currentTimeMillis()
+        // Throttle: skip kalau baru saja dihitung < 15 detik lalu
+        if (now - lastCalculatedAt < 15_000L && lastCalculatedAt != 0L) return@LaunchedEffect
+        lastCalculatedAt = now
+
+        val result = PassengerETACalculator.calculateEta(
+            userLocation.latitude, userLocation.longitude,
+            busLat, busLng
+        )
+        result.fold(
+            onSuccess = { eta ->
+                distanceKm = eta.distanceKm
+                etaMinutes = eta.durationMinutes
+            },
+            onFailure = {
+                // Fallback Haversine kalau Routes API gagal (mis. tidak ada koneksi)
+                val fallback = PassengerETACalculator.calculateEtaManual(
+                    userLocation.latitude, userLocation.longitude,
+                    busLat, busLng,
+                    averageSpeedKmh = if ((bus.location.speed) > 5f) bus.location.speed else 30f
+                )
+                distanceKm = fallback.distanceKm
+                etaMinutes = fallback.durationMinutes
+            }
+        )
     }
 
     Row(
@@ -235,11 +269,14 @@ private fun InfoBoxRow(bus: Bus, userLocation: LatLng?) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // ETA box — primary (blue)
+        // ✅ FIX: kalau >= 60 menit, tampilkan ringkas "1j 10m" (value) tanpa unit terpisah,
+        // supaya tidak perlu ubah ukuran teks. Kalau < 60 menit, tetap format lama (angka + "Menit").
+        val etaDisplay = formatDurationCompact(etaMinutes)
         InfoBox(
             modifier  = Modifier.weight(1f),
             label     = "ESTIMASI",
-            value     = etaMinutes?.toString() ?: "-",
-            unit      = "Menit",
+            value     = etaDisplay.value,
+            unit      = etaDisplay.unit,
             bgColor   = Blue600,
             textColor = White,
         )
@@ -271,7 +308,7 @@ private fun InfoBox(
     modifier: Modifier   = Modifier,
     label: String,
     value: String,
-    unit: String,
+    unit: String?        = null, // ✅ FIX: opsional, supaya value yang sudah lengkap (mis. "1j 10m") tidak perlu unit tambahan
     bgColor: Color,
     textColor: Color,
     labelColor: Color    = textColor.copy(alpha = 0.7f),
@@ -298,11 +335,13 @@ private fun InfoBox(
                 style = MaterialTheme.typography.headlineLarge.copy(fontSize = 28.sp),
                 color = textColor,
             )
-            Text(
-                text  = unit,
-                style = MaterialTheme.typography.bodySmall,
-                color = textColor.copy(alpha = 0.8f),
-            )
+            if (unit != null) {
+                Text(
+                    text  = unit,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor.copy(alpha = 0.8f),
+                )
+            }
         }
     }
 }
@@ -353,9 +392,10 @@ private fun EtaDetailCard(eta: Bus.Eta) {
                 )
             }
 
+            // ✅ FIX: pakai formatDuration supaya 70 menit tampil "1 jam 10 menit", bukan "70 menit"
             EtaDetailItem(
                 label = "Durasi Perjalanan",
-                value = eta.remainingTime?.let { "${it / 60} menit" } ?: "-",
+                value = formatDuration(eta.remainingTime),
             )
         }
     }
@@ -426,7 +466,7 @@ private fun TotalDistanceCard(totalDistance: Double?) {
 }
 
 @Composable
-private fun KondisiCard(kondisi: String, kondisiUpdate: String?) {
+private fun KondisiCard(kondisi: String, kondisiUpdate: Long?) {  // FIX: Long? bukan String?
     val kondisiColor by animateColorAsState(
         targetValue = when (kondisi.lowercase()) {
             "lancar" -> KondisiLancar
@@ -463,7 +503,7 @@ private fun KondisiCard(kondisi: String, kondisiUpdate: String?) {
                 )
                 kondisiUpdate?.let {
                     Text(
-                        text  = "Update: ${getTimeAgo(it)}",
+                        text  = "Update: ${getTimeAgo(it)}",  // FIX: pakai Long langsung
                         style = MaterialTheme.typography.labelSmall,
                         color = Slate400,
                     )
@@ -529,7 +569,7 @@ private fun DriverCard(driver: String) {
 }
 
 @Composable
-private fun LastUpdateCard(lastUpdate: String?) {
+private fun LastUpdateCard(lastUpdate: Long?) {  // FIX: Long? bukan String?
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = Slate100,
@@ -551,7 +591,7 @@ private fun LastUpdateCard(lastUpdate: String?) {
             Text(
                 text  = buildString {
                     append("Data real-time")
-                    if (lastUpdate != null) append(" • Update ${getTimeAgo(lastUpdate)}")
+                    if (lastUpdate != null) append(" • Update ${getTimeAgo(lastUpdate)}")  // FIX: Long langsung
                 },
                 style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
                 color = Slate400,
@@ -562,12 +602,48 @@ private fun LastUpdateCard(lastUpdate: String?) {
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
+/**
+ * ✅ TAMBAH: versi ringkas untuk InfoBox (value besar + unit kecil di bawahnya).
+ * < 60 menit  -> value="45", unit="Menit"
+ * >= 60 menit -> value="1j 10m", unit=null (sudah lengkap, tidak perlu unit tambahan)
+ */
+private data class CompactDuration(val value: String, val unit: String?)
+
+private fun formatDurationCompact(minutes: Int?): CompactDuration {
+    if (minutes == null) return CompactDuration("-", "Menit")
+    if (minutes < 60) return CompactDuration(minutes.toString(), "Menit")
+    val jam = minutes / 60
+    val sisaMenit = minutes % 60
+    val text = if (sisaMenit == 0) "${jam}j" else "${jam}j ${sisaMenit}m"
+    return CompactDuration(text, null)
+}
+
+/**
+ * ✅ TAMBAH: format durasi dalam menit menjadi teks yang lebih mudah dibaca.
+ * < 60 menit  -> "45 menit"
+ * >= 60 menit -> "1 jam 10 menit" (atau "1 jam" kalau pas habis)
+ */
+private fun formatDuration(minutes: Int?): String {
+    if (minutes == null) return "-"
+    if (minutes < 60) return "$minutes menit"
+    val jam = minutes / 60
+    val sisaMenit = minutes % 60
+    return if (sisaMenit == 0) "$jam jam" else "$jam jam $sisaMenit menit"
+}
+
+
+// ✅ FIX: HAPUS asumsi UTC saat parsing.
+// Root cause: string "estimatedArrival" yang disimpan di RTDB oleh ETACalculator.formatTimestamp()
+// sebenarnya SUDAH memakai timezone device (WIB) meskipun diberi akhiran 'Z' (mislabel, bukan UTC asli).
+// Kode lama memaksa parse sebagai UTC lalu format ulang ke WIB → menambahkan +7 jam ekstra
+// (18:50 jadi tampil 01:50). Data di RTDB sendiri sudah benar, jadi cukup parse & tampilkan apa adanya
+// tanpa konversi timezone tambahan.
 private fun parseArrivalTime(estimatedArrival: String?): String {
     if (estimatedArrival == null) return "-"
     return try {
-        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
+        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        // TIDAK di-set ke UTC — biarkan default timezone device (WIB),
+        // karena string yang datang sudah representasi jam lokal.
         val date = inputFormat.parse(estimatedArrival) ?: return "-"
         SimpleDateFormat("HH:mm", Locale.US).format(date)
     } catch (e: Exception) {
@@ -575,22 +651,19 @@ private fun parseArrivalTime(estimatedArrival: String?): String {
     }
 }
 
-private fun getTimeAgo(timestamp: String): String {
+// FIX: parameter diubah dari String ke Long (timestamp dalam milliseconds)
+private fun getTimeAgo(timestamp: Long): String {
     return try {
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-        val date = sdf.parse(timestamp) ?: return "N/A"
-        val diff = System.currentTimeMillis() - date.time
+        val diff    = System.currentTimeMillis() - timestamp
         val seconds = TimeUnit.MILLISECONDS.toSeconds(diff)
         val minutes = TimeUnit.MILLISECONDS.toMinutes(diff)
         val hours   = TimeUnit.MILLISECONDS.toHours(diff)
         val days    = TimeUnit.MILLISECONDS.toDays(diff)
         when {
-            seconds < 60  -> "${seconds} detik lalu"
-            minutes < 60  -> "${minutes} menit lalu"
-            hours   < 24  -> "${hours} jam lalu"
-            else          -> "${days} hari lalu"
+            seconds < 60 -> "$seconds detik lalu"
+            minutes < 60 -> "$minutes menit lalu"
+            hours   < 24 -> "$hours jam lalu"
+            else         -> "$days hari lalu"
         }
     } catch (e: Exception) {
         "N/A"
